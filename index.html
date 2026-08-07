@@ -31,26 +31,46 @@
   function vat(v){ if(typeof v==='number') return '₩'+Math.round(v).toLocaleString('en-US'); var s=S(v); return s==='영세율'?'₩0':s; }
   function A1(ws){ return g.XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:'',blankrows:true}); }
 
+  /* 헤더맵: 2·3행(0-based) 텍스트를 합쳐 열 이름으로 사용 (공백 제거) */
+  function buildHeaderMap(A){
+    var r2=A[2]||[], r3=A[3]||[], n=Math.max(r2.length,r3.length), hdr=[];
+    for(var c=0;c<n;c++){ hdr[c]=(S(r2[c])+' '+S(r3[c])).replace(/\s+/g,''); }
+    return hdr;
+  }
+  function findCol(hdr,pred,from){ for(var c=(from||0);c<hdr.length;c++){ if(pred(hdr[c])) return c; } return -1; }
+
   function parseUPS(ws){
-    var A=A1(ws), rows=[];
-    var nc=A.reduce(function(m,r){return Math.max(m,r.length);},0);
-    var big=nc>=29;                 // 29열: 통관(관세) 뒤에 '날짜(관세입금일)' 열이 추가된 형식
-    var cU=big?27:26, cNote=big?28:27, cDuty=23, cDutyDate=big?24:-1, cLog=big?25:24, cSum=big?26:25;
+    var A=A1(ws), rows=[], hdr=buildHeaderMap(A);
+    /* 좌측 고정 블록(NO..특송비용 합계)은 모든 버전에서 위치 동일 */
+    var C={no:0,carrier:1,custNo:2,invNo:3,method:4,sendDate:5,arrDate:6,client:7,tracking:8,
+           product:9,qty:10,pkg:11,weight:12,estWeight:13,actWeight:14,destName:15,destMgr:16,
+           feeEst:17,vatYN:18,inspectFee:19,feeFinal:20,feeSum:21};
+    /* 정산 블록은 열이 추가/이동되므로 헤더 이름으로 탐색 */
+    var iUns=findCol(hdr,function(h){return h.indexOf('정산금액')>=0||h.indexOf('누적금액')>=0;},22);
+    if(iUns<0) iUns=hdr.length-2;
+    var iNote=findCol(hdr,function(h){return h.indexOf('비고')>=0;});
+    if(iNote<0) iNote=hdr.length-1;
+    var iSettleDate=findCol(hdr,function(h){return h.indexOf('날짜')>=0;},22);
+    var iDuty=findCol(hdr,function(h){return h.indexOf('통관')>=0&&h.indexOf('관세')>=0;},22);
+    var iLog=findCol(hdr,function(h){return h.indexOf('물류비')>=0;},22);
+    var iSettleSum=findCol(hdr,function(h){return h.indexOf('합계')>=0;},22);
     for(var r=4;r<A.length;r++){
-      var row=A[r], no=S(row[0]); if(!no) continue;
-      var un=row[cU], uns;
+      var row=A[r], no=S(row[C.no]); if(!/^\d+$/.test(no)) continue;   // 숫자 NO 행만(합계·요약행 제외)
+      var un=row[iUns], uns;                         // 미정산금액: 부호 상관없이 잔액(절대값)으로 표기
       if(typeof un==='number') uns = un!==0? ('₩'+Math.abs(Math.round(un)).toLocaleString('en-US')) : '₩0';
       else { var su=S(un); uns = su? ('₩'+Math.abs(parseInt(su.replace(/[^0-9-]/g,''),10)||0).toLocaleString('en-US')) : ''; }
       rows.push({
-        no:no, carrier:S(row[1]), custNo:S(row[2]), invNo:S(row[3]), method:S(row[4]),
-        sendDate:fmtDate(row[5]), arrDate:fmtDate(row[6]), client:S(row[7]), tracking:S(row[8]),
-        product:S(row[9]), qty:(typeof row[10]==='number'?String(row[10]):S(row[10])), pkg:S(row[11]),
-        weight:num2(row[12]), estWeight:numComma2(row[13]), actWeight:num2(row[14]),
-        destName:S(row[15]), destMgr:S(row[16]),
-        feeEst:fmtWon(row[17]), vatYN:vat(row[18]), inspectFee:fmtWon(row[19]),
-        feeFinal:fmtWon(row[20]), feeSum:fmtWon(row[21]), settleDate:fmtDate(row[22]),
-        duty:fmtWon(row[cDuty]), dutyDate:(cDutyDate>=0?fmtDate(row[cDutyDate]):''),
-        logistics:fmtWon(row[cLog]), settleSum:fmtWon(row[cSum]), unsettled:uns, note:S(row[cNote])
+        no:no, carrier:S(row[C.carrier]), custNo:S(row[C.custNo]), invNo:S(row[C.invNo]), method:S(row[C.method]),
+        sendDate:fmtDate(row[C.sendDate]), arrDate:fmtDate(row[C.arrDate]), client:S(row[C.client]), tracking:S(row[C.tracking]),
+        product:S(row[C.product]), qty:(typeof row[C.qty]==='number'?String(row[C.qty]):S(row[C.qty])), pkg:S(row[C.pkg]),
+        weight:num2(row[C.weight]), estWeight:numComma2(row[C.estWeight]), actWeight:num2(row[C.actWeight]),
+        destName:S(row[C.destName]), destMgr:S(row[C.destMgr]),
+        feeEst:fmtWon(row[C.feeEst]), vatYN:vat(row[C.vatYN]), inspectFee:fmtWon(row[C.inspectFee]),
+        feeFinal:fmtWon(row[C.feeFinal]), feeSum:fmtWon(row[C.feeSum]),
+        settleDate:(iSettleDate>=0?fmtDate(row[iSettleDate]):''),
+        duty:(iDuty>=0?fmtWon(row[iDuty]):''), dutyDate:'',
+        logistics:(iLog>=0?fmtWon(row[iLog]):''), settleSum:(iSettleSum>=0?fmtWon(row[iSettleSum]):''),
+        unsettled:uns, note:S(row[iNote])
       });
     }
     return rows;
